@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="hu">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Mobil 3D Horror</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #000; font-family: 'Courier New', Courier, monospace; }
+        #ui {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            color: #fff;
+            z-index: 10;
+            pointer-events: none;
+            text-shadow: 0 0 5px #fff;
+        }
+        #game-over {
+            display: none;
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: red;
+            font-size: 2rem;
+            text-align: center;
+            background: rgba(0,0,0,0.8);
+            padding: 20px;
+            border: 1px solid red;
+            z-index: 20;
+        }
+        .controls-hint {
+            position: absolute;
+            bottom: 20px;
+            width: 100%;
+            text-align: center;
+            color: rgba(255,255,255,0.5);
+            pointer-events: none;
+            font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="ui">Távolság a lénytől: <span id="dist">0</span>m</div>
+    <div id="game-over">
+        ELKAPOTT!<br>
+        <button onclick="location.reload()" style="margin-top:10px; padding:10px; background:red; border:none; color:white;">ÚJRA</button>
+    </div>
+    <div class="controls-hint">BAL OLDAL: Mozgás | JOBB OLDAL: Nézelődés</div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    
+    <script>
+        // --- ALAP BEÁLLÍTÁSOK ---
+        const scene = new THREE.Scene();
+        // Sűrű, fekete köd a horror hatáshoz
+        scene.fog = new THREE.FogExp2(0x000000, 0.035);
+
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.shadowMap.enabled = true; // Árnyékok bekapcsolása
+        document.body.appendChild(renderer.domElement);
+
+        // --- VILÁGÍTÁS (ZSEBLÁMPA) ---
+        // Gyenge környezeti fény
+        const ambientLight = new THREE.AmbientLight(0x111111);
+        scene.add(ambientLight);
+
+        // A játékos zseblámpája
+        const flashLight = new THREE.SpotLight(0xffffff, 1.5, 40, Math.PI / 6, 0.5, 1);
+        flashLight.position.set(0, 0, 0);
+        flashLight.castShadow = true;
+        camera.add(flashLight); // A lámpa a kamerához van rögzítve
+        flashLight.target.position.set(0, 0, -1);
+        camera.add(flashLight.target);
+        scene.add(camera);
+
+        // --- PÁLYA GENERÁLÁS ---
+        // Padló
+        const floorGeometry = new THREE.PlaneGeometry(100, 100);
+        const floorMaterial = new THREE.MeshStandardMaterial({ 
+            color: 0x222222, 
+            roughness: 0.8,
+            metalness: 0.2
+        });
+        const floor = new THREE.Mesh(floorGeometry, floorMaterial);
+        floor.rotation.x = -Math.PI / 2;
+        floor.receiveShadow = true;
+        scene.add(floor);
+
+        // Oszlopok (Erdő/Labirintus imitáció)
+        const boxGeo = new THREE.BoxGeometry(1, 6, 1);
+        const boxMat = new THREE.MeshStandardMaterial({ color: 0x333333 });
+
+        for (let i = 0; i < 80; i++) {
+            const box = new THREE.Mesh(boxGeo, boxMat);
+            box.position.x = (Math.random() - 0.5) * 80;
+            box.position.z = (Math.random() - 0.5) * 80;
+            box.position.y = 3;
+            box.castShadow = true;
+            box.receiveShadow = true;
+            scene.add(box);
+        }
+
+        // --- AZ ELLENSÉG (SZÖRNY) ---
+        const enemyGeo = new THREE.SphereGeometry(0.8, 32, 32);
+        const enemyMat = new THREE.MeshStandardMaterial({ 
+            color: 0xff0000, 
+            emissive: 0x550000, // Világít a sötétben
+            roughness: 0.1 
+        });
+        const enemy = new THREE.Mesh(enemyGeo, enemyMat);
+        enemy.position.set(10, 1.5, 10);
+        enemy.castShadow = true;
+        
+        // Pulzáló fény a szörny körül
+        const enemyLight = new THREE.PointLight(0xff0000, 1, 10);
+        enemy.add(enemyLight);
+        scene.add(enemy);
+
+        // --- IRÁNYÍTÁS LOGIKA (MOBIL + PC) ---
+        let moveForward = false;
+        let moveBackward = false;
+        let rotateLeft = false;
+        let rotateRight = false;
+        
+        // Érintés adatok
+        let touchStartX = 0;
+        let touchStartY = 0;
+
+        document.addEventListener('touchstart', (e) => {
+            e.preventDefault();
+            Array.from(e.touches).forEach(touch => {
+                if (touch.clientX < window.innerWidth / 2) {
+                    // Bal oldal: Mozgás
+                    moveForward = true;
+                } else {
+                    // Jobb oldal: Kezdőpont forgáshoz
+                    touchStartX = touch.clientX;
+                }
+            });
+        }, { passive: false });
+
+        document.addEventListener('touchmove', (e) => {
+            e.preventDefault();
+            Array.from(e.touches).forEach(touch => {
+                if (touch.clientX > window.innerWidth / 2) {
+                    // Jobb oldal: Forgatás
+                    let deltaX = touch.clientX - touchStartX;
+                    camera.rotation.y -= deltaX * 0.005;
+                    touchStartX = touch.clientX;
+                }
+            });
+        }, { passive: false });
+
+        document.addEventListener('touchend', (e) => {
+            // Ha felemeljük az ujjunkat, álljon meg a mozgás
+            // Egyszerűsített logika: ha nincs ujj a bal oldalon, stop
+            let leftSideTouch = false;
+            Array.from(e.touches).forEach(touch => {
+                if (touch.clientX < window.innerWidth / 2) leftSideTouch = true;
+            });
+            if (!leftSideTouch) moveForward = false;
+        });
+
+        // PC billentyűzet támogatás (teszteléshez)
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'w') moveForward = true;
+            if (e.key === 's') moveBackward = true;
+            if (e.key === 'a') rotateLeft = true;
+            if (e.key === 'd') rotateRight = true;
+        });
+        document.addEventListener('keyup', (e) => {
+            if (e.key === 'w') moveForward = false;
+            if (e.key === 's') moveBackward = false;
+            if (e.key === 'a') rotateLeft = false;
+            if (e.key === 'd') rotateRight = false;
+        });
+
+        // --- JÁTÉK CIKLUS ---
+        let isGameOver = false;
+        camera.position.y = 1.6; // Szemmagasság
+
+        function animate() {
+            requestAnimationFrame(animate);
+
+            if (isGameOver) return;
+
+            // 1. Játékos mozgás
+            if (moveForward) camera.translateZ(-0.1);
+            if (moveBackward) camera.translateZ(0.1);
+            if (rotateLeft) camera.rotation.y += 0.03;
+            if (rotateRight) camera.rotation.y -= 0.03;
+
+            // 2. Szörny mozgása (AI)
+            // Lassan követi a játékost
+            const enemySpeed = 0.065; // Sebesség
+            enemy.lookAt(camera.position);
+            enemy.translateZ(enemySpeed);
+            
+            // Pulzálás effektus
+            const time = Date.now() * 0.003;
+            enemy.scale.setScalar(1 + Math.sin(time) * 0.1);
+            enemyLight.intensity = 1 + Math.sin(time) * 0.5;
+
+            // 3. Távolság mérése és Ütközés
+            const dist = camera.position.distanceTo(enemy.position);
+            document.getElementById('dist').innerText = Math.round(dist);
+
+            // Ha túl közel ér
+            if (dist < 1.5) {
+                isGameOver = true;
+                document.getElementById('game-over').style.display = 'block';
+                camera.lookAt(enemy.position); // Ráfordulunk a halál pillanatában
+            }
+
+            renderer.render(scene, camera);
+        }
+
+        // Átméretezés kezelése
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        animate();
+    </script>
+</body>
+</html>
